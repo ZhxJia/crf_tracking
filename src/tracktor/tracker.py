@@ -11,6 +11,8 @@ from .utils import bbox_overlaps, warp_pos, get_center, get_height, get_width, m
 
 from torchvision.ops.boxes import clip_boxes_to_image, nms
 
+import src.tracktor.factorgraph as fg
+
 
 class Tracker:
     """The main tracking file, here is where magic happens."""
@@ -44,15 +46,22 @@ class Tracker:
         self.results = {}
 
         # for crf_inference
-        self.tracks_count = 0
+        # self.tracks_count = 0
         self.id_frame_info_t_2 = []
         self.id_frame_info_t_1 = []
         self.id_frame_info_t = []
+        self.all_metric_info = []
 
     def reset(self, hard=True):
+        """reset for different seq"""
         self.tracks = []
         self.inactive_tracks = []
-        self.tracks_count = 0
+
+        # self.tracks_count = 0
+        self.id_frame_info_t_2 = []
+        self.id_frame_info_t_1 = []
+        self.id_frame_info_t = []
+        self.all_metric_info = []
 
         if hard:
             self.track_num = 0
@@ -60,16 +69,24 @@ class Tracker:
             self.im_index = 0
 
     # functions for crf inference
-    def get_center(self):
-        pass
-
-    def get_size(self):
-        pass
+    # def get_center(self, pos):
+    #     """[x1,y1,x2,y2]->[cx,cy]"""
+    #     cx = (pos[:, 0] + pos[:, 2]) / 2.
+    #     cy = (pos[:, 1] + pos[:, 3]) / 2.
+    #     center = torch.stack([cx, cy], axis=1)
+    #     return center
+    #
+    # def get_size(self, boxes):
+    #     """[x1,y1,x2,y2]->[w,h]."""
+    #     w = boxes[:, 2] - boxes[:, 0]
+    #     h = boxes[:, 3] - boxes[:, 1]
+    #     box_size = torch.stack([w, h], axis=1)
+    #     return box_size
 
     # -------
 
     def tracks_to_inactive(self, tracks):
-        self.tracks = [t for t in self.tracks if t not in tracks]
+        self.tracks = [t for t in self.tracks if t not in tracks]  # update tracks
         for t in tracks:
             t.pos = t.last_pos[-1]
         self.inactive_tracks += tracks
@@ -89,24 +106,143 @@ class Tracker:
             ))
         self.track_num += num_new
 
+    def get_crf_metrics(self, track):
+        """calculate crf metrics return list of [track_id,dv_x,dv_y,dl_x,dl_y,dr,score,w,h]"""
+
+        last_pos = list(track.last_pos)
+        track_id = int(track.id)
+
+        # calculate the change of velocity from frame t-1 to frame t
+        v_t = get_center(last_pos[-1]) - get_center(last_pos[-2])
+        v_t_1 = get_center(last_pos[-2]) - get_center(last_pos[-3])
+        dv = v_t - v_t_1
+
+        # calculate the change of 'size change' from frame t-1 to frame t(temporary code,too complex)
+        w_t = get_width(last_pos[-1])
+        w_t_1 = get_width(last_pos[-2])
+        w_t_2 = get_width(last_pos[-3])
+        dw_t = w_t / w_t_1
+        dw_t_1 = w_t_1 / w_t_2
+        dw = dw_t / dw_t_1
+        h_t = get_height(last_pos[-1])
+        h_t_1 = get_height(last_pos[-2])
+        h_t_2 = get_height(last_pos[-3])
+        dh_t = h_t / h_t_1
+        dh_t_1 = h_t_1 / h_t_2
+        dh = dh_t / dh_t_1
+
+        # calculate the change of `size ratio`(w/h) from frame t-1 to frame t
+        r_t = w_t / h_t
+        r_t_1 = w_t_1 / h_t_1
+        dr = r_t / r_t_1
+
+        crf_metric = [track_id, dv[0], dv[1], dw, dh, dr, track.score, w_t, h_t, track.track_count]
+        return crf_metric
+
+    # calculate the potential of a unary-type factor
+    def calc_unary(self, F_info, Wu):
+        beta = 1
+        score = F_info[6].numpy()
+        dr = F_info[5].numpy()
+        Pu_1_s = abs(1. - score)
+        Pu_1_r = abs(1 - dr)
+        Pu_1 = Pu_1_s + beta * Pu_1_r
+        return np.array([exp(-Wu * Pu_0), exp(-Wu * Pu_1)])
+        # here we use parameter share, whereas we could also use different
+        # parameters for each label configuration
+
+    def calc_binary(F_info, Wb):  # F_info is a list of two lists
+        dvxi = F_info[0][1].numpy()
+        dvyi = F_info[0][2].numpy()
+        dlxi = F_info[0][3].numpy()
+        dlyi = F_info[0][4].numpy()
+        scorei = F_info[0][6].numpy()
+        hi = F_info[0][8].numpy()
+
+        dvxj = F_info[1][1].numpy()
+        dvyj = F_info[1][2].numpy()
+        dlxj = F_info[1][3].numpy()
+        dlyj = F_info[1][4].numpy()
+        scorej = F_info[1][6].numpy()
+        hj = F_info[1][8].numpy()
+
+        alpha1 = 2
+        alpha2 = 10
+        alpha3 = 100
+        theta = 0.99
+        tao = 1 / (hi + hj)
+        Pb_11 = alpha1 * tao * ((dvxi - dvxj) ** 2 + (dvyi - dvyj) ** 2) \
+                + alpha2 * (abs(dlxi - dlxj) + abs(dlyi - dlyj))
+        if (scorei > theta and scorej > theta):
+            Pb_not_11 = alpha3
+        else:
+            Pb_not_11 = 0
+        return np.array([[exp(-Wb * Pb_not_11), exp(-Wb * Pb_not_11)], [exp(-Wb * Pb_not_11), exp(-Wb * Pb_11)]])
+
+    def crf_inference(self, frame_info):
+        '''
+        :param frame_info:
+        :return: tuple of marg for each node
+        '''
+        g = fg.Graph()
+        node_id_list = [l[0] for l in frame_info]
+        for i in range(len(node_id_list)):
+            node_i = str(node_id_list[i])
+            g.rv(node_i, 2)
+
+        for i in range(len(node_id_list)):
+            node_i = str(node_id_list[i])
+            # first, add the unary factors
+            # frame_info[i] -> [id,dvx,dvy,dw,dh,dr,score,w,h,count]
+            g.factor([node_i], potential=self.calc_unary(frame_info[i], Wu=1))
+            # second , add the binary factors
+            for j in range(len(node_id_list)):
+                if j <= 1:
+                    continue
+                node_j = str(node_id_list[j])
+                g.factor([node_i, node_j], potential=self.calc_binary([frame_info[i], frame_info[j]], Wb=0.05))
+
+        # Run(loopy) belief propagation (LBP)
+        iters, converged = g.lbp_MAP(normalize=True)
+        marg_tuples = g.rv_marginals(normalize=False)
+
+        return marg_tuples
+
     def regress_tracks(self, blob):
         """Regress the position of the tracks and also checks their scores."""
         pos = self.get_pos()
-        self.tracks_count += 1
+        pos_now = pos
         # regress
-        boxes, scores = self.obj_detect.predict_boxes(blob['img'], pos) #raw boxes -> (x1,y1,x2,y2) N*4
+        boxes, scores = self.obj_detect.predict_boxes(blob['img'], pos)  # raw boxes -> (x1,y1,x2,y2) N*4
         pos = clip_boxes_to_image(boxes, blob['img'].shape[-2:])
-
-        # crf
-        print(f"tracks_count = {self.tracks_count}")
-        if(self.tracks_count):
-            self.id_frame_info_t_2 = self.id_frame_info_t_1
 
         s = []
         for i in range(len(self.tracks) - 1, -1, -1):
             t = self.tracks[i]
             t.score = scores[i]
 
+            # get crf metrics
+            if t.track_count > 2:
+                crf_metric = self.get_crf_metrics(t)
+                self.all_metric_info.append(crf_metric)  # append per track crf metric of this frame
+            # ----
+
+        # do crf inference
+        if len(self.all_metric_info):
+            marg_tuples = self.crf_inference(self.all_metric_info)
+            for t_id, marg in marg_tuples:
+                vals = range(t_id.n_opts)
+                if len(t_id.labels) > 0:
+                    vals = t_id.labels
+                map_rv = np.argmax(marg)
+                if map_rv == 0:
+                    self.tracks_to_inactive([inactive_t for inactive_t in self.tracks if inactive_t.id == t_id])
+
+        else:
+            print(" the crf metric lists is empty,skip crf inference and use score instead")
+            # use score metric to inactive track ,此处先不写 score单独判断的情况了，假设先进行了crf的inactive又进行了score的inactive
+
+        for i in range(len(self.tracks) - 1, -1, -1):
             if scores[i] <= self.regression_person_thresh:
                 self.tracks_to_inactive([t])
             else:
@@ -114,7 +250,6 @@ class Tracker:
                 # t.prev_pos = t.pos
                 t.pos = pos[i].view(1, -1)
 
-        self.is_first_frame = False
         return torch.Tensor(s[::-1]).cuda()
 
     def get_pos(self):
@@ -276,6 +411,7 @@ class Tracker:
         for t in self.tracks:
             # add current position to last_pos list
             t.last_pos.append(t.pos.clone())
+            t.track_count += 1
 
         ###########################
         # Look for new detections #
@@ -394,6 +530,9 @@ class Tracker:
             t for t in self.inactive_tracks if t.has_positive_area() and t.count_inactive <= self.inactive_patience
         ]
 
+        # for t in self.tracks:
+        #     t.track_count += 1
+
         self.im_index += 1
         self.last_image = blob['img'][0]
 
@@ -413,9 +552,12 @@ class Track(object):
         self.count_inactive = 0
         self.inactive_patience = inactive_patience
         self.max_features_num = max_features_num
-        self.last_pos = deque([pos.clone()], maxlen=mm_steps + 1)
+        self.last_pos = deque([pos.clone()], maxlen=mm_steps + 2)  # 这个地方应该在配置文件中修改n_step = 2
         self.last_v = torch.Tensor([])
         self.gt_id = None
+
+        self.track_count = 0  # success track count >=3 ->crf_inference
+        self.llast_post = deque([pos.clone()], maxlen=mm_steps + 2)
 
     def has_positive_area(self):
         return self.pos[0, 2] > self.pos[0, 0] and self.pos[0, 3] > self.pos[0, 1]
@@ -438,4 +580,9 @@ class Track(object):
 
     def reset_last_pos(self):
         self.last_pos.clear()
+        self.track_count = 0
         self.last_pos.append(self.pos.clone())
+
+    def reset_llast_pos(self):
+        self.llast_post.clear()
+        self.llast_post.append(self.pos.clone())

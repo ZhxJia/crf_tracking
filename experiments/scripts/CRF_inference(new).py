@@ -1,7 +1,7 @@
 from math import exp
 import csv
 import numpy as np
-import factorgraph as fg
+import src.tracktor.factorgraph as fg
 
 '''
  MOT09 :frame 437-447 id:5
@@ -12,7 +12,7 @@ import factorgraph as fg
 
 root = '../../Tracktor++/'
 dataset = 'MOT17-05-FRCNN.txt'
-frame = [500, 570]
+frame = [568, 570]
 
 
 def get_center(info):
@@ -155,12 +155,24 @@ for test_frame_id in range(frame[0], frame[1]):
 
     # Run (loopy) belief propagation (LBP)
     iters, converged = g.lbp_MAP(normalize=True)
-    print('\n LBP ran for %d iterations. Converged = %r' % (iters, converged))
-    print('\n')
-    print(f'frame id:{test_frame_id} in ' + dataset)
-    # Print out the final messages from LBP
-    g.print_messages()
+
+    marg_tuples = g.rv_marginals(normalize=False)
+
+    print(f"marg_tuples: {marg_tuples}")
+
+    for rv, marg in marg_tuples:
+        print(str(rv))
+        vals = range(rv.n_opts)
+        if len(rv.labels) > 0:
+            vals = rv.labels
+        map_rv = np.argmax(marg)
+        print('\t', map_rv)
+    # print('\n LBP ran for %d iterations. Converged = %r' % (iters, converged))
     # print('\n')
-    # Print out the final marginals
-    g.print_rv_marginals(normalize=True)
-    g.print_rv_MAP()
+    # print(f'frame id:{test_frame_id} in ' + dataset)
+    # # Print out the final messages from LBP
+    # g.print_messages()
+    # # print('\n')
+    # # Print out the final marginals
+    # g.print_rv_marginals(normalize=True)
+    # g.print_rv_MAP()
