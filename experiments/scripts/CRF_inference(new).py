@@ -7,12 +7,12 @@ import src.tracktor.factorgraph as fg
  MOT09 :frame 437-447 id:5
  MOT09 :frame 502-525 id:33
  MOT05 :frame 562-570 id:61
- MOT11 :frame 798-817 id:53 reid的错误问题
+ MOT11 :frame 798-817 id:53 reid的                                                                                      错误问题
 '''
 
 root = '../../Tracktor++/'
 dataset = 'MOT17-05-FRCNN.txt'
-frame = [568, 570]
+frame = [567, 569]
 
 
 def get_center(info):
@@ -116,7 +116,7 @@ def calc_binary(F_info, Wb):  # F_info is a list of two lists
 
     alpha1 = 2
     alpha2 = 10
-    alpha3 = 100
+    alpha3 = 10
     theta = 0.99
     tao = 1 / (hi + hj)
     Pb_11 = alpha1 * tao * ((dvxi - dvxj) ** 2 + (dvyi - dvyj) ** 2) \
@@ -140,9 +140,11 @@ for test_frame_id in range(frame[0], frame[1]):
     for i in range(len(node_id_list)):
         node_i = str(node_id_list[i])  # node_i is the track_id (turned into str) for the variable node i
         g.rv(node_i, 2)  # yi can be 0 or 1
-
+    print(f"\n node_id_list:{node_id_list}")
     for i in range(len(node_id_list)):
         node_i = str(node_id_list[i])
+        if node_i == '23':
+            test = 0
         # first, add the unary factors
         # frame_info[i] -> [id,dvx,dvy,dl,score,is_fake]
         g.factor([node_i], potential=calc_unary(frame_info[i], Wu=1))
@@ -151,6 +153,7 @@ for test_frame_id in range(frame[0], frame[1]):
             if j <= i:
                 continue
             node_j = str(node_id_list[j])
+
             g.factor([node_i, node_j], potential=calc_binary([frame_info[i], frame_info[j]], Wb=0.05))
 
     # Run (loopy) belief propagation (LBP)
@@ -161,18 +164,18 @@ for test_frame_id in range(frame[0], frame[1]):
     print(f"marg_tuples: {marg_tuples}")
 
     for rv, marg in marg_tuples:
-        print(str(rv))
+     #   print(str(rv))
         vals = range(rv.n_opts)
         if len(rv.labels) > 0:
             vals = rv.labels
         map_rv = np.argmax(marg)
-        print('\t', map_rv)
+    #    print('\t', map_rv)
     # print('\n LBP ran for %d iterations. Converged = %r' % (iters, converged))
     # print('\n')
-    # print(f'frame id:{test_frame_id} in ' + dataset)
+    print(f'frame id:{test_frame_id} in ' + dataset)
     # # Print out the final messages from LBP
-    # g.print_messages()
+    g.print_messages()
     # # print('\n')
     # # Print out the final marginals
-    # g.print_rv_marginals(normalize=True)
-    # g.print_rv_MAP()
+    g.print_rv_marginals(normalize=True)
+    g.print_rv_MAP()

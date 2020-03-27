@@ -7,16 +7,13 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from scipy.optimize import linear_sum_assignment
 import cv2
-
-from .utils import bbox_overlaps, warp_pos, get_center, get_height, get_width, make_pos, judge_wh_bound
+import csv
+import os
+from .utils import bbox_overlaps, warp_pos, get_center, get_height, get_width, make_pos
 
 from torchvision.ops.boxes import clip_boxes_to_image, nms
 
 import tracktor.factorgraph as fg
-
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(levelname)s - %(message)s', datefmt='%I:%M:%S')
 
 
 class Tracker:
@@ -56,6 +53,7 @@ class Tracker:
         self.id_frame_info_t_1 = []
         self.id_frame_info_t = []
         self.all_metric_info = []
+        self._frame_id = 0 #for debug
 
     def reset(self, hard=True):
         """reset for different seq"""
@@ -67,11 +65,34 @@ class Tracker:
         self.id_frame_info_t_1 = []
         self.id_frame_info_t = []
         self.all_metric_info = []
-
+        self._frame_id = 0
         if hard:
             self.track_num = 0
             self.results = {}
             self.im_index = 0
+
+    # functions for crf inference
+    # def get_center(self, pos):
+    #     """[x1,y1,x2,y2]->[cx,cy]"""
+    #     cx = (pos[:, 0] + pos[:, 2]) / 2.
+    #     cy = (pos[:, 1] + pos[:, 3]) / 2.
+    #     center = torch.stack([cx, cy], axis=1)
+    #     return center
+    #
+    # def get_size(self, boxes):
+    #     """[x1,y1,x2,y2]->[w,h]."""
+    #     w = boxes[:, 2] - boxes[:, 0]
+    #     h = boxes[:, 3] - boxes[:, 1]
+    #     box_size = torch.stack([w, h], axis=1)
+    #     return box_size
+
+    # -------
+    def TrackById(self,id):
+        for t in self.tracks:
+            if(t.id == eval(id.name)):
+                return t
+        print(f"[Error]: can not find id{id.name} in tracks")
+        return IndexError
 
     def tracks_to_inactive(self, tracks):
         self.tracks = [t for t in self.tracks if t not in tracks]  # update tracks
@@ -125,6 +146,7 @@ class Tracker:
         dr = r_t / r_t_1
 
         crf_metric = [track_id, dv[0], dv[1], dw, dh, dr, track.score, w_t, h_t, track.track_count]
+        
         return crf_metric
 
     # calculate the potential of a unary-type factor
@@ -140,7 +162,7 @@ class Tracker:
         # here we use parameter share, whereas we could also use different
         # parameters for each label configuration
 
-    def calc_binary(self, F_info, Wb):  # F_info is a list of two lists
+    def calc_binary(self,F_info, Wb):  # F_info is a list of two lists
         dvxi = F_info[0][1].detach().cpu().numpy()
         dvyi = F_info[0][2].detach().cpu().numpy()
         dlxi = F_info[0][3].detach().cpu().numpy()
@@ -156,8 +178,8 @@ class Tracker:
         hj = F_info[1][8].detach().cpu().numpy()
 
         alpha1 = 2.
-        alpha2 = 20.
-        alpha3 = 1.
+        alpha2 = 10.
+        alpha3 = 100.
         theta = 0.99
         tao = 1 / (hi + hj)
         Pb_11 = alpha1 * tao * ((dvxi - dvxj) ** 2 + (dvyi - dvyj) ** 2) \
@@ -176,7 +198,7 @@ class Tracker:
         g = fg.Graph()
         node_id_list = [l[0] for l in frame_info]
         print(f"\n node_id_list:{node_id_list}")
-
+        
         for i in range(len(node_id_list)):
             node_i = str(node_id_list[i])
             g.rv(node_i, 2)
@@ -191,8 +213,8 @@ class Tracker:
                 if j >= i:
                     continue
                 node_j = str(node_id_list[j])
-                # print(f"node_i:{node_i},node_j:{node_j}\n")
-                g.factor([node_i, node_j], potential=self.calc_binary([frame_info[i], frame_info[j]], Wb=0.4))
+                #print(f"node_i:{node_i},node_j:{node_j}\n")
+                g.factor([node_i, node_j], potential=self.calc_binary([frame_info[i],frame_info[j]], Wb=0.05))
 
         # Run(loopy) belief propagation (LBP)
         iters, converged = g.lbp_MAP(normalize=True)
@@ -210,29 +232,29 @@ class Tracker:
         pos = clip_boxes_to_image(boxes, blob['img'].shape[-2:])
 
         s = []
-        for i in range(len(self.tracks) - 1, -1, -1):
-            t = self.tracks[i]
-            t.score = scores[i]  ##note :: scores need to update after inactive
-            t.pre_pos = pos[i].view(1, -1)
-            if scores[i] <= self.regression_person_thresh:
-                self.tracks_to_inactive([t])
-            # else:
-            #     s.append(scores[i])
-            #     t.pos = pos[i].view(1,-1)
-            # t.prev_pos = t.pos
 
         # note: pos,scores is one-to-one correspondence
         for i in range(len(self.tracks) - 1, -1, -1):
             t = self.tracks[i]
-            # t.score = scores[i]
-            # t.pre_pos = pos[i]
+            t.score = scores[i]
+            t.new_pos = pos[i].view(1,-1)
 
             # get crf metrics
             if t.track_count > 2:
                 crf_metric = self.get_crf_metrics(t)
                 all_metric_info.append(crf_metric)  # append per track crf metric of this frame 
             # ----
-
+        
+        #debug info 
+        #os.makedirs("./debug_info",exist_ok=True)
+        with open("./debug_info/crf_metric.txt","a") as f:
+            self._frame_id += 1
+            print(f'\n Frame:{self._frame_id}',file=f)
+            writer = csv.writer(f,delimiter=",")
+            for line in all_metric_info:
+                writer.writerow([line])
+        
+        
         # do crf inference
         if len(all_metric_info):
             marg_tuples = self.crf_inference(all_metric_info)
@@ -242,32 +264,34 @@ class Tracker:
                     vals = t_id.labels
                 map_rv = np.argmax(marg)
                 if map_rv == 0:
-                    print(
-                        f"crf inference inactive  ----->  track_id:{t_id} \n")  # print inactive track by crf inference with score
-                    self.tracks_to_inactive(
-                        [inactive_t for inactive_t in self.tracks if inactive_t.id == eval(t_id.name)])
-
+                    iat = self.TrackById(t_id) 
+                    print(f"crf inference inactive  ----->  track_id:{t_id}   with socre : {iat.score}\n") #print inactive track by crf inference with score
+                    self.tracks_to_inactive([inactive_t for inactive_t in self.tracks if inactive_t.id == eval(t_id.name)])
+    
         else:
             print(" the crf metric lists is empty,skip crf inference and just use score instead")
-            # socre and position should correspind to each other
-
-        for t_i in range(len(self.tracks) - 1, -1, -1):
-            active_tracks = self.tracks[t_i]
-            s.append(active_tracks.score)
-            active_tracks.pos = active_tracks.pre_pos
-
-        # print(f"s--->{s}")
-
-        # for i in range(len(self.tracks) - 1, -1, -1):
-        #     t = self.tracks[i]
-        #     t.score = scores[i] ##note :: scores need to update after inactive
-        #     if scores[i] <= self.regression_person_thresh:
-        #         self.tracks_to_inactive([t])
-        #     else:
-        #         s.append(scores[i])
-        #         # t.prev_pos = t.pos
-        #         t.pos = pos[i].view(1, -1)
-
+                            # socre and position should correspind to each other
+        
+        
+        
+        # for t_i in range(len(self.tracks) - 1, -1, -1):
+        #     active_tracks = self.tracks[t_i]
+        #     s.append(active_tracks.score)
+        #     active_tracks.pos = active_tracks.new_pos
+            
+        
+        for i in range(len(self.tracks) - 1, -1, -1):
+            t = self.tracks[i]
+            #t.score = scores[i] ##note :: scores need to update after inactive
+            if t.score <= self.regression_person_thresh:
+                print(f"use score inactive  ----->  track_id:{t.id}   with score : {t.score}\n") #print inactive track by crf inference with score
+                self.tracks_to_inactive([t])
+            else:
+                s.append(t.score)
+                # t.prev_pos = t.pos
+                t.pos = t.new_pos
+        print(f"s--->{s}")
+        
         return torch.Tensor(s[::-1]).cuda()
 
     def get_pos(self):
@@ -577,7 +601,7 @@ class Track(object):
 
         self.track_count = 0  # success track count >=3 ->crf_inference
         self.llast_post = deque([pos.clone()], maxlen=mm_steps + 2)
-        self.pre_pos = pos
+        self.new_pos = pos
 
     def has_positive_area(self):
         return self.pos[0, 2] > self.pos[0, 0] and self.pos[0, 3] > self.pos[0, 1]

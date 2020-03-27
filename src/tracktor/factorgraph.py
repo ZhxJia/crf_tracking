@@ -41,7 +41,6 @@ import signal
 # 3rd party
 import numpy as np
 
-
 # Constants
 # -----------------------------------------------------------------------------
 
@@ -71,6 +70,8 @@ def signal_handler(signal, frame):
     logger.info('Ctrl-C pressed; stopping early...')
     global E_STOP
     E_STOP = True
+
+
 signal.signal(signal.SIGINT, signal_handler)
 
 
@@ -300,7 +301,7 @@ class Graph(object):
             todo ([RV])
         '''
         # base case: just look up the current assignment
-        todo=list(todo)
+        todo = list(todo)
         if len(todo) == 0:
             return assigned, self.joint(assigned)
 
@@ -373,7 +374,7 @@ class Graph(object):
         return cur_iter, converged
 
     def lbp_MAP(self, init=True, normalize=False, max_iters=LBP_MAX_ITERS,
-            progress=False):
+                progress=False):
         '''
         Loopy belief propagation.
         FAQ:
@@ -425,10 +426,7 @@ class Graph(object):
                 n_converged = n.recompute_outgoing_MAP(normalize=normalize)
                 converged = converged and n_converged
 
-
-
         return cur_iter, converged
-
 
     def _sorted_nodes(self):
         '''
@@ -452,7 +450,7 @@ class Graph(object):
             n.init_lbp()
 
     def print_sorted_nodes(self):
-        print (self._sorted_nodes())
+        print(self._sorted_nodes())
 
     def print_messages(self, nodes=None):
         '''
@@ -462,7 +460,7 @@ class Graph(object):
         '''
         if nodes is None:
             nodes = self._sorted_nodes()
-        print ('Current outgoing messages:')
+        print('Current outgoing messages:')
         for n in nodes:
             n.print_messages()
 
@@ -507,19 +505,19 @@ class Graph(object):
         if normalize:
             disp += ' (normalized)'
         disp += ':'
-        print (disp)
+        print(disp)
 
         # Extract
         tuples = self.rv_marginals(rvs, normalize)
 
         # Display
         for rv, marg in tuples:
-            print (str(rv))
+            print(str(rv))
             vals = range(rv.n_opts)
             if len(rv.labels) > 0:
                 vals = rv.labels
             for i in range(len(vals)):
-                print ('\t', vals[i], '\t', marg[i])
+                print('\t', vals[i], '\t', marg[i])
 
     def print_rv_MAP(self, rvs=None):
         '''
@@ -534,22 +532,19 @@ class Graph(object):
         # Preamble
         disp = 'Marginals for RVs'
         disp += ':'
-        print (disp)
+        print(disp)
 
         # Extract
         tuples = self.rv_marginals(rvs, False)
 
         # Display
         for rv, marg in tuples:
-            print (str(rv))
+            print(str(rv))
             vals = range(rv.n_opts)
             if len(rv.labels) > 0:
                 vals = rv.labels
-            map_rv=np.argmax(marg)
-            print ('\t', map_rv)
-
-
-
+            map_rv = np.argmax(marg)
+            print('\t', map_rv)
 
     def debug_stats(self):
         logger.debug('Graph stats:')
@@ -624,7 +619,7 @@ class RV(object):
         Displays the current outgoing messages for this RV.
         '''
         for i, f in enumerate(self._factors):
-            print ('\t', self, '->', f, '\t', self._outgoing[i])
+            print('\t', self, '->', f, '\t', self._outgoing[i])
 
     def recompute_outgoing_MAP(self, normalize=False):
         '''
@@ -650,12 +645,14 @@ class RV(object):
         for i in range(len(self._factors)):
             o = divide_safezero(total, incoming[i])
             if normalize:
-                delta=np.exp(1/len(o)*sum(np.log(o)))
+                delta = np.exp(1 / len(o) * sum(np.log(o)))  # ???
+                if delta < 1e-5:
+                    test = 1
                 o = divide_safezero(o, delta)
             self._outgoing[i] = o
             convg = convg and \
-                sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
-                self.n_opts
+                    sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
+                    self.n_opts
         return convg
 
     def recompute_outgoing(self, normalize=False):
@@ -685,8 +682,8 @@ class RV(object):
                 o = divide_safezero(o, sum(o))
             self._outgoing[i] = o
             convg = convg and \
-                sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
-                self.n_opts
+                    sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
+                    self.n_opts
         return convg
 
     def get_outgoing_for(self, f):
@@ -928,16 +925,16 @@ class Factor(object):
         all_idx = range(len(belief.shape))
         for i, rv in enumerate(self._rvs):
             rv_belief = divide_safezero(belief, incoming[i])
-            axes = tuple(list(all_idx[:i]) + list(all_idx[i+1:]))
+            axes = tuple(list(all_idx[:i]) + list(all_idx[i + 1:]))
             o = rv_belief.sum(axis=axes)
             if self.debug:
-                assert self._outgoing[i].shape == (rv.n_opts, )
+                assert self._outgoing[i].shape == (rv.n_opts,)
             if normalize:
                 o = divide_safezero(o, sum(o))
             self._outgoing[i] = o
             convg = convg and \
-                sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
-                rv.n_opts
+                    sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
+                    rv.n_opts
 
         return convg
 
@@ -983,16 +980,17 @@ class Factor(object):
         all_idx = list(range(len(belief.shape)))
         for i, rv in enumerate(self._rvs):
             rv_belief = divide_safezero(belief, incoming[i])
-            axes = tuple(all_idx[:i] + all_idx[i+1:])
-            o = np.max(rv_belief,axis=axes)
+            axes = tuple(all_idx[:i] + all_idx[i + 1:])
+            o = np.max(rv_belief, axis=axes)
             if self.debug:
-                assert self._outgoing[i].shape == (rv.n_opts, )
+                assert self._outgoing[i].shape == (rv.n_opts,)
             # if normalize:
             #     o = divide_safezero(o, sum(o))
-            self._outgoing[i] = o # self._outgoing[i] is a list of np.array(2,), each array is the output message to a RV
+            self._outgoing[
+                i] = o  # self._outgoing[i] is a list of np.array(2,), each array is the output message to a RV
             convg = convg and \
-                sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
-                rv.n_opts
+                    sum(np.isclose(old_outgoing[i], self._outgoing[i])) == \
+                    rv.n_opts
 
         return convg
 
@@ -1001,7 +999,7 @@ class Factor(object):
         Displays the current outgoing messages for this Factor.
         '''
         for i, rv in enumerate(self._rvs):
-            print ('\t', self, '->', rv, '\t', self._outgoing[i])
+            print('\t', self, '->', rv, '\t', self._outgoing[i])
 
     def attach(self, rv):
         '''
@@ -1100,8 +1098,8 @@ class Factor(object):
                 got = d
                 want = self._rvs[i].n_opts
                 assert got == want, (
-                    'potential %r dim #%d has %d opts but rv has %d opts' %
-                    (p, i+1, got, want))
+                        'potential %r dim #%d has %d opts but rv has %d opts' %
+                        (p, i + 1, got, want))
 
         # Set it
         self._potential = p
