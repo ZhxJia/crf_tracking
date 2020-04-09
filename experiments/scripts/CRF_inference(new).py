@@ -11,8 +11,8 @@ import src.tracktor.factorgraph as fg
 '''
 
 root = '../../Tracktor++/'
-dataset = 'MOT17-05-FRCNN.txt'
-frame = [567, 569]
+dataset = 'MOT17-09-FRCNN.txt'
+frame = [214, 216]
 
 
 def get_center(info):
@@ -164,7 +164,7 @@ for test_frame_id in range(frame[0], frame[1]):
     print(f"marg_tuples: {marg_tuples}")
 
     for rv, marg in marg_tuples:
-     #   print(str(rv))
+        #   print(str(rv))
         vals = range(rv.n_opts)
         if len(rv.labels) > 0:
             vals = rv.labels
@@ -179,3 +179,48 @@ for test_frame_id in range(frame[0], frame[1]):
     # # Print out the final marginals
     g.print_rv_marginals(normalize=True)
     g.print_rv_MAP()
+
+
+class RcFilter(object):
+    def __init__(self, alpha=0.1):
+        self.alpha = alpha
+        self.inited = False
+        self.state_ = 0
+
+    def rc_filter(self, state):
+        if self.inited:
+            self.state_ = state + self.alpha * (self.state_ - state)
+        else:
+            self.state_ = state
+            self.inited = True
+
+        return self.state_
+
+    def set_alpha(self, alpha):
+        self.alpha = alpha
+
+    def reset(self, alpha):
+        self.inited = False
+        self.alpha = alpha
+
+
+if __name__ == "__main__":
+    t4 = [688.3897, 374.0476, 868.1024, 785.6213]
+    t3 = [661.3889, 375.3804, 857.5449, 794.2615]
+    t2 = [657.6810, 375.7964, 847.5156, 801.2861]
+    t1 = [659.8661, 377.5836, 843.6268, 795.8494]
+
+    a = (t4[2] + t4[0]) * 0.5 + (t2[2] + t2[0]) * 0.5 - (t3[2] + t3[0])
+    b = (t4[2] + t4[0]) * 0.5 - (t3[2] + t3[0]) * 0.5
+    c = (t3[2] + t3[0]) * 0.5 - (t2[2] + t2[0]) * 0.5
+
+    print(a)
+    print(c)
+    print(b)
+    rc = RcFilter()
+
+    c_ = rc.rc_filter(c)
+    rc.set_alpha(0.2)
+    b_ = rc.rc_filter(b)
+    print(c_)
+    print(b_)

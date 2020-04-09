@@ -299,6 +299,14 @@ def get_center(pos):
     return torch.Tensor([(x2 + x1) / 2, (y2 + y1) / 2]).cuda()
 
 
+def get_center_f(pos, w, h):
+    x1 = pos[0, 0]
+    y1 = pos[0, 1]
+    c_x = x1 + w * 0.5
+    c_y = y1 + h * 0.5
+    return torch.Tensor([c_x, c_y]).cuda()
+
+
 def get_width(pos):
     return pos[0, 2] - pos[0, 0]
 

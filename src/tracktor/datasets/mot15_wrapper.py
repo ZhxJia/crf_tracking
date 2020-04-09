@@ -1,6 +1,6 @@
 from torch.utils.data import Dataset
 
-from .mot15_sequence import MOT15Sequence
+from mot15_sequence import MOT15Sequence
 
 
 class MOT15Wrapper(Dataset):

@@ -1,9 +1,9 @@
 from torch.utils.data import Dataset, ConcatDataset
 import torch
 
-from .mot_reid_wrapper import MOTreIDWrapper
-from .cuhk03 import CUHK03
-from .market1501 import Market1501
+from mot_reid_wrapper import MOTreIDWrapper
+from cuhk03 import CUHK03
+from market1501 import Market1501
 
 
 class MarCUHMOT(Dataset):

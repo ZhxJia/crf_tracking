@@ -7,17 +7,13 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from scipy.optimize import linear_sum_assignment
 import cv2
-
-from .utils import bbox_overlaps, warp_pos, get_center, get_height, get_width, make_pos, judge_wh_bound
-
+from .utils import bbox_overlaps, warp_pos, get_center, get_height, get_width, judge_wh_bound, make_pos, get_center_f
 from torchvision.ops.boxes import clip_boxes_to_image, nms
-
 import tracktor.factorgraph as fg
-
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(levelname)s -%(lineno)d - %(message)s',
-                    datefmt='%I:%M:%S')
+                    datefmt='%I:%M:%S', filename='./log/inactive.log', filemode='a')
 
 
 class Tracker:
@@ -50,6 +46,7 @@ class Tracker:
         self.track_num = 0
         self.im_index = 0
         self.results = {}
+        self.frame_index = 0
 
         # for crf_inference
         # self.tracks_count = 0
@@ -68,16 +65,25 @@ class Tracker:
         self.id_frame_info_t_1 = []
         self.id_frame_info_t = []
         self.all_metric_info = []
+        self.frame_index = 0
 
         if hard:
             self.track_num = 0
             self.results = {}
             self.im_index = 0
 
+    def TrackById(self, id):
+        for t in self.tracks:
+            if (t.id == eval(id.name)):
+                return t
+        logging.error(f"[Error]: can not find id{id.name} in tracks")
+        return IndexError
+
     def tracks_to_inactive(self, tracks):
         self.tracks = [t for t in self.tracks if t not in tracks]  # update tracks
         for t in tracks:
             t.pos = t.last_pos[-1]
+            # t.just_inactivated=True
         self.inactive_tracks += tracks
 
     def add(self, new_det_pos, new_det_scores, new_det_features):
@@ -101,34 +107,41 @@ class Tracker:
         last_pos = list(track.last_pos)
         track_id = int(track.id)
 
-        # calculate the change of velocity from frame t-1 to frame t
-        v_t = get_center(pre_pos) - get_center(last_pos[-1])
-        v_t_1 = get_center(last_pos[-1]) - get_center(last_pos[-2])
-        dv = v_t - v_t_1
-        dv = dv * F / 14.
-
         # calculate the change of 'size change' from frame t-1 to frame t(temporary code,too complex)
+
         w_t = get_width(pre_pos)
+        h_t = get_height(pre_pos)
+
+        dr_f = track.dr_filter.rc_filter(w_t / h_t)
+        w_t = h_t * dr_f
+
         w_t_1 = get_width(last_pos[-1])
         w_t_2 = get_width(last_pos[-2])
         dw_t = w_t / w_t_1
         dw_t_1 = w_t_1 / w_t_2
         dw = dw_t / dw_t_1
-        dw = (dw - 1.) * F / 14. + 1.
+        dw = (dw - 1) * F / 14 + 1
 
-        h_t = get_height(pre_pos)
         h_t_1 = get_height(last_pos[-1])
         h_t_2 = get_height(last_pos[-2])
         dh_t = h_t / h_t_1
         dh_t_1 = h_t_1 / h_t_2
         dh = dh_t / dh_t_1
-        dh = (dh - 1.) * F / 14. + 1.
+        dh = (dh - 1) * F / 14 + 1
 
         # calculate the change of `size ratio`(w/h) from frame t-1 to frame t
         r_t = w_t / h_t
         r_t_1 = w_t_1 / h_t_1
         dr = r_t / r_t_1
-        dr = (dr - 1.) * F / 14. + 1.
+        dr = (dr - 1) * F / 14 + 1
+        # calculate the change of velocity from frame t-1 to frame t
+
+        # v_t = get_center(pre_pos) - get_center(last_pos[-1])
+        # v_t_1 = get_center(last_pos[-1]) - get_center(last_pos[-2])
+        v_t = get_center_f(pre_pos, w_t, h_t) - get_center_f(last_pos[-1], w_t, h_t)
+        v_t_1 = get_center_f(last_pos[-1], w_t, h_t) - get_center_f(last_pos[-2], w_t, h_t)
+        dv = v_t - v_t_1
+        dv = dv * F * F / 14.
 
         # judge if the object is out of image boundary
         w_is_bound, h_is_bound = judge_wh_bound(pre_pos, img_shape)
@@ -139,7 +152,7 @@ class Tracker:
 
     # calculate the potential of a unary-type factor
     def calc_unary(self, F_info, Wu):
-        beta = 1.
+        beta = 1
         score = F_info[6].detach().cpu().numpy()
         dr = F_info[5].detach().cpu().numpy()
         Pu_0 = abs(0. - score)
@@ -169,6 +182,7 @@ class Tracker:
         wj_is_bound = F_info[1][9]
         hj_is_bound = F_info[1][10]
 
+        # h_effective indicates if abs(dlyi-dlyj) takes effect in binary term
         w_effective = not (wi_is_bound or wj_is_bound)
         h_effective = not (hi_is_bound or hj_is_bound)
 
@@ -179,8 +193,9 @@ class Tracker:
         tao = 1 / (hi + hj)
         Pb_11 = alpha1 * tao * ((dvxi - dvxj) ** 2 + (dvyi - dvyj) ** 2) \
                 + alpha2 * (abs(dlyi - dlyj)) * h_effective
-
+        obj_num = 0.5 * (obj_num) * (obj_num - 1)
         Pb_11 = Pb_11 / obj_num
+
         if (scorei > theta and scorej > theta):
             Pb_not_11 = torch.FloatTensor([alpha3])
         else:
@@ -194,7 +209,6 @@ class Tracker:
         '''
         g = fg.Graph()
         node_id_list = [l[0] for l in frame_info]
-        print(f"\n node_id_list:{node_id_list}")
 
         for i in range(len(node_id_list)):
             node_i = str(node_id_list[i])
@@ -211,7 +225,8 @@ class Tracker:
                     continue
                 node_j = str(node_id_list[j])
                 # print(f"node_i:{node_i},node_j:{node_j}\n")
-                g.factor([node_i, node_j], potential=self.calc_binary([frame_info[i], frame_info[j]], Wb=0.4))
+                g.factor([node_i, node_j],
+                         potential=self.calc_binary([frame_info[i], frame_info[j]], len(frame_info), Wb=0.4))
 
         # Run(loopy) belief propagation (LBP)
         iters, converged = g.lbp_MAP(normalize=True)
@@ -221,57 +236,53 @@ class Tracker:
 
     def regress_tracks(self, blob, F, seq_no):
         """Regress the position of the tracks and also checks their scores."""
+
         pos = self.get_pos()
-        pos_now = pos
         all_metric_info = []
         # regress
         boxes, scores = self.obj_detect.predict_boxes(blob['img'], pos)  # raw boxes -> (x1,y1,x2,y2) N*4
         pos = clip_boxes_to_image(boxes, blob['img'].shape[-2:])
+        # blob['img'].shape[-2:] -> [h,w]
 
         s = []
         for i in range(len(self.tracks) - 1, -1, -1):
             t = self.tracks[i]
-            t.crf_judged = False
             t.score = scores[i]  ##note :: scores need to update after inactive
             t.pre_pos = pos[i].view(1, -1)
 
+            if t.score <= 0.4:
+                self.tracks_to_inactive([t])
+                logging.warning(f"{seq_no} use score inactive  --->  track_id:{t.id}   with score : {t.score}")
+                continue
             # get crf metrics
             if t.track_count > 1:
                 crf_metric = self.get_crf_metrics(t, blob['img'].shape[-2:], F)  # h,w
                 all_metric_info.append(crf_metric)  # append per track crf metric of this frame
-                t.crf_judged = True
 
         # do crf inference
-        # if len(all_metric_info):
-        if True:
+        if len(all_metric_info) > 10:
+            all_metric_info = sorted(all_metric_info, key=(lambda x: x[6]))
+            all_metric_info = all_metric_info[:10]
+
+        if len(all_metric_info):
             marg_tuples = self.crf_inference(all_metric_info)
-            with open('CRF_inactive_' + seq_no + '.txt', 'a') as ff:
+            with open('./log/CRF_inactive_' + seq_no + '.txt', 'a') as ff:
                 print("Frame:{}\n".format(self.im_index + 1), file=ff)
                 for t_id, marg in marg_tuples:
-                    vals = range(t_id.n_opts)
-                    if len(t_id.labels) > 0:
-                        vals = t_id.labels
                     map_rv = np.argmax(marg)
                     if map_rv == 0:
+                        iat = self.TrackById(t_id)
+                        logging.warning(
+                            f"{seq_no} frame:{self.frame_index}  crf inference inactive ---> track_id:{t_id} with score : {iat.score}\n"
+                            f"last pos: {iat.last_pos} now_pos: {iat.pre_pos}")
                         for item in all_metric_info:
                             if item[0] == eval(t_id.name):
-                                if item[6] >= 0.5:
-                                    # print inactive track by crf inference with score
-                                    print("CRF Inactive --> {} \n".format(eval(t_id.name)), file=ff)
-                                else:
-                                    print("Normal inactive --> {} \n".format(eval(t_id.name)), file=ff)
+                                print("CRF Inactive --> {} with score:{}\n".format(eval(t_id.name), iat.score), file=ff)
                         self.tracks_to_inactive(
                             [inactive_t for inactive_t in self.tracks if inactive_t.id == eval(t_id.name)])
-        else:
-            for tt in self.tracks:
-                if tt.score <= self.regression_person_thresh:
-                    self.tracks_to_inactive([tt])
+
         for t_i in range(len(self.tracks) - 1, -1, -1):
             track = self.tracks[t_i]
-            if not track.crf_judged:
-                if track.score <= self.regression_person_thresh:
-                    self.tracks_to_inactive([track])
-                    continue
             # From here on, all tracks are active ones
             s.append(track.score)
             track.pos = track.pre_pos
@@ -314,13 +325,14 @@ class Tracker:
 
         if self.do_reid:
             new_det_features = self.reid_network.test_rois(
-                blob['img'], new_det_pos).data
+                blob['img'], new_det_pos).data #对应新检测目标的特征向量
 
-            if len(self.inactive_tracks) >= 1:
+            if len(self.inactive_tracks) >= 1: # 匹配新检测目标和inactive
                 # calculate appearance distances
                 dist_mat, pos = [], []
                 for t in self.inactive_tracks:
-                    dist_mat.append(torch.cat([t.test_features(feat.view(1, -1)) for feat in new_det_features], dim=1))
+                    dist_mat.append(torch.cat([t.test_features(feat.view(1, -1)) for feat in new_det_features], dim=1)) #track与每一个newdet的特征距离列表
+                    #计算每一个新检测的目标的特征向量与inactive track的特征向量(存储10个)均值的距离
                     pos.append(t.pos)
                 if len(dist_mat) > 1:
                     dist_mat = torch.cat(dist_mat, 0)
@@ -328,7 +340,7 @@ class Tracker:
                 else:
                     dist_mat = dist_mat[0]
                     pos = pos[0]
-
+                # print('dist_mat1:{}'.format(dist_mat))
                 # calculate IoU distances
                 iou = bbox_overlaps(pos, new_det_pos)
                 iou_mask = torch.ge(iou, self.reid_iou_threshold)
@@ -434,6 +446,7 @@ class Tracker:
         """This function should be called every timestep to perform tracking with a blob
         containing the image information.
         """
+        self.frame_index += 1
         for t in self.tracks:
             # add current position to last_pos list
             t.last_pos.append(t.pos.clone())
@@ -444,7 +457,8 @@ class Tracker:
         ###########################
 
         # self.obj_detect.load_image(blob['data'][0])
-        if self.public_detections:
+        # if self.public_detections:
+        if False:
             dets = blob['dets'].squeeze(dim=0)
             if dets.nelement() > 0:
                 boxes, scores = self.obj_detect.predict_boxes(blob['img'], dets)
@@ -457,7 +471,7 @@ class Tracker:
             boxes = clip_boxes_to_image(boxes, blob['img'].shape[-2:])
 
             # Filter out tracks that have too low person score
-            inds = torch.gt(scores, self.detection_person_thresh).nonzero().view(-1)
+            inds = torch.gt(scores, self.detection_person_thresh).nonzero().view(-1) #0.5
         else:
             inds = torch.zeros(0).cuda()
 
@@ -491,16 +505,16 @@ class Tracker:
             if len(self.tracks):
                 # create nms input
 
-                # nms here if tracks overlap
-                keep = nms(self.get_pos(), person_scores, self.regression_nms_thresh)
+                # nms here if tracks overlap 将相互遮挡的tracks 给inactive
+                keep = nms(self.get_pos(), person_scores, self.regression_nms_thresh) #keep 返回索引 按分数降序排列
                 print(f"tracks:{len(self.tracks)}\n")
-                print(f"keep tracks index:{keep}\n")
+
                 self.tracks_to_inactive([self.tracks[i] for i in list(range(len(self.tracks))) if i not in keep])
 
                 if keep.nelement() > 0:
                     if self.do_reid:
-                        new_features = self.get_appearances(blob)
-                        self.add_features(new_features)
+                        new_features = self.get_appearances(blob) #只保存当前帧active的track的feature
+                        self.add_features(new_features) #更新active track的特征向量
 
         #####################
         # Create new tracks #
@@ -516,11 +530,11 @@ class Tracker:
             det_pos = det_pos[keep]
             det_scores = det_scores[keep]
 
-            # check with every track in a single run (problem if tracks delete each other)
+            # check with every track in a single run (problem if tracks delete each other) 一个一个遍历防止track相互nms
             for t in self.tracks:
                 nms_track_pos = torch.cat([t.pos, det_pos])
                 nms_track_scores = torch.cat(
-                    [torch.tensor([2.0]).to(det_scores.device), det_scores])
+                    [torch.tensor([2.0]).to(det_scores.device), det_scores])  #将det中与任意一个track重合大于0.3的去除
                 keep = nms(nms_track_pos, nms_track_scores, self.detection_nms_thresh)
 
                 keep = keep[torch.ge(keep, 1)] - 1
@@ -552,6 +566,7 @@ class Tracker:
 
         for t in self.inactive_tracks:
             t.count_inactive += 1
+            # t.just_inactivated=False
 
         self.inactive_tracks = [
             t for t in self.inactive_tracks if t.has_positive_area() and t.count_inactive <= self.inactive_patience
@@ -577,6 +592,7 @@ class Track(object):
         self.features = deque([features])
         self.ims = deque([])
         self.count_inactive = 0
+        # self.just_inactivated=False
         self.inactive_patience = inactive_patience
         self.max_features_num = max_features_num
         self.last_pos = deque([pos.clone()], maxlen=mm_steps + 2)
@@ -585,8 +601,9 @@ class Track(object):
 
         self.track_count = 0  # success track count >=3 ->crf_inference
         self.llast_post = deque([pos.clone()], maxlen=mm_steps + 2)
-        self.pre_pos = pos  # new regress pos
-        self.crf_judged = False
+        self.pre_pos = pos
+
+        self.dr_filter = RcFilter(alpha=0.1)
 
     def has_positive_area(self):
         return self.pos[0, 2] > self.pos[0, 0] and self.pos[0, 3] > self.pos[0, 1]
@@ -594,7 +611,7 @@ class Track(object):
     def add_features(self, features):
         """Adds new appearance features to the object."""
         self.features.append(features)
-        if len(self.features) > self.max_features_num:
+        if len(self.features) > self.max_features_num: #10
             self.features.popleft()
 
     def test_features(self, test_features):
@@ -604,6 +621,9 @@ class Track(object):
         else:
             features = self.features[0]
         features = features.mean(0, keepdim=True)
+        # if self.just_inactivated==True:
+        #     dist = F.pairwise_distance(features, test_features, keepdim=True)+10
+        # else:
         dist = F.pairwise_distance(features, test_features, keepdim=True)
         return dist
 
@@ -615,3 +635,26 @@ class Track(object):
     def reset_llast_pos(self):
         self.llast_post.clear()
         self.llast_post.append(self.pos.clone())
+
+
+class RcFilter(object):
+    def __init__(self, alpha=0.1):
+        self.alpha = alpha
+        self.inited = False
+        self.state_ = 0
+
+    def rc_filter(self, state):
+        if self.inited:
+            self.state_ = state + self.alpha * (self.state_ - state)
+        else:
+            self.state_ = state
+            self.inited = True
+
+        return self.state_
+
+    def set_alpha(self, alpha):
+        self.alpha = alpha
+
+    def reset(self, alpha):
+        self.inited = False
+        self.alpha = alpha

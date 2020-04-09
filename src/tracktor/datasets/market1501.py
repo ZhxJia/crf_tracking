@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import CenterCrop, Normalize, Compose, RandomHorizontalFlip, RandomCrop, ToTensor, RandomResizedCrop
 
-from ..config import cfg
+from config import cfg
 
 
 class Market1501(Dataset):

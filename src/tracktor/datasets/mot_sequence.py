@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 
 import cv2
 
-from ..config import cfg
+from config import cfg
 from torchvision.transforms import ToTensor
 
 

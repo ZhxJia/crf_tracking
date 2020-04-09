@@ -1,8 +1,9 @@
 
-from .mot_wrapper import MOT17Wrapper, MOT19Wrapper, MOT17LOWFPSWrapper
-from .mot_reid_wrapper import MOTreIDWrapper
-from .mot15_wrapper import MOT15Wrapper
-from .marcuhmot import MarCUHMOT
+from mot_wrapper import MOT17Wrapper, MOT19Wrapper, MOT17LOWFPSWrapper
+from mot_reid_wrapper import MOTreIDWrapper
+from mot15_wrapper import MOT15Wrapper
+from marcuhmot import MarCUHMOT
+
 
 
 _sets = {}

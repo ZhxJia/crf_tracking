@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 import torch
 
-from .mot_reid import MOTreID
+from mot_reid import MOTreID
 
 
 class MOTreIDWrapper(Dataset):

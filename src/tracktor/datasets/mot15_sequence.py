@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 
-from ..config import cfg
+from config import cfg
 
 
 class MOT15Sequence(Dataset):

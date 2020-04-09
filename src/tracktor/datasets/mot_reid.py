@@ -1,7 +1,7 @@
 # from model.test import _get_blobs
 
-from .mot_sequence import MOT17Sequence
-from ..config import get_output_dir
+from mot_sequence import MOT17Sequence
+from config import get_output_dir
 
 import cv2
 from PIL import Image

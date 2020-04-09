@@ -109,9 +109,9 @@ if __name__ == "__main__":
     # args = parse_args()
     # output_file_dir = "../../data/gd_out"
     # result_dir = "../../data/MOT17Labels/train"
-    output_file_dir = "../../data/twbn_out"
-    result_dir = "../../data/tracking_wo_bnw-output_v2/output/tracktor/MOT17/Tracktor++/"
-    mot_dir = "../../data/MOT17Det/train"
+    output_file_dir = "../../data/mine_out"
+    result_dir = "../../output/tracktor/MOT17/Tracktor++/"
+    mot_dir = "../../data/MOT17Det/test"
 
 
 
